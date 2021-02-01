@@ -6,5 +6,5 @@ pub mod errors;
 pub type Result<T> = std::result::Result<T, errors::AdaptorError>;
 
 pub use adaptor::AdaptorHandle;
-pub use common::AdaptorSettings;
+pub use adaptor_common::AdaptorSettings;
 pub use errors::AdaptorError;

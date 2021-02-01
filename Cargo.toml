@@ -1,8 +1,7 @@
 [workspace]
 members = [
-    "common",
+    "adaptor-common",
     "adaptor-core",
-    # "adaptor-firmware",
     "adaptor-cli",
     "adaptor-gui",
 ]

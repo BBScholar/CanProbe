@@ -1,8 +1,8 @@
 use crate::AdaptorError;
 use crate::Result;
 
-use common::{AdaptorSettings, CANFrame};
-use common::{CMD_PACKET_SIZE, VENDOR_ID};
+use adaptor_common::{AdaptorSettings, CANFrame};
+use adaptor_common::{CMD_PACKET_SIZE, VENDOR_ID};
 
 use lazy_static::lazy_static;
 
@@ -20,7 +20,7 @@ pub(crate) struct AdaptorInfo {
 }
 
 impl AdaptorInfo {
-    pub const VID: u16 = common::VENDOR_ID;
+    pub const VID: u16 = adaptor_common::VENDOR_ID;
     pub(crate) fn new(version: String, pid: u16, in_ep: u8, out_ep: u8, swo_ep: u8) -> Self {
         Self {
             version,

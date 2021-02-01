@@ -2,7 +2,7 @@
 members = [
     "common",
     "adaptor-core",
-    "adaptor-firmware",
+    # "adaptor-firmware",
     "adaptor-cli",
     "adaptor-gui",
 ]

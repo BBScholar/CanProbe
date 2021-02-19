@@ -7,11 +7,29 @@ use getset::{Getters, Setters};
 pub const VENDOR_ID: u16 = 0x69;
 pub const CMD_PACKET_SIZE: usize = 16;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Setters, Getters)]
-pub struct AdaptorSettings {
-    #[getset(get, set)]
-    update_freq: f32,
+use num_enum;
 
+#[repr(u8)]
+#[derive(
+    defmt::Format,
+    num_enum::TryFromPrimitive,
+    num_enum::IntoPrimitive,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+)]
+pub enum UsbRequests {
+    NOP = 0x0,
+    Settings,
+    Reset,
+    Run,
+    LedEnable,
+    GetError,
+}
+
+#[derive(defmt::Format, Debug, Clone, Copy, Serialize, Deserialize, Setters, Getters)]
+pub struct AdaptorSettings {
     #[getset(get, set)]
     rx_mask: u32,
 
@@ -20,15 +38,18 @@ pub struct AdaptorSettings {
 
     #[getset(get, set)]
     can_id: u32,
+
+    #[getset(get, set)]
+    can_config: u32,
 }
 
 impl Default for AdaptorSettings {
     fn default() -> Self {
         Self {
-            update_freq: 1000.0,
             rx_mask: 0,
             leds: true,
             can_id: 0,
+            can_config: 0,
         }
     }
 }

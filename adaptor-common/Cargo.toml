@@ -5,6 +5,8 @@ authors = ["Ben Scholar <bbs27@case.edu>"]
 edition = "2018"
 
 [dependencies]
+defmt = "*"
 getset = "0.1.1"
 postcard = "0.5.1"
 serde = {version = "1.0.123", default-features = false}
+num_enum = "0.5"

@@ -1,3 +1,4 @@
+#![feature(array_methods)]
 #![allow(dead_code)]
 
 pub mod adaptor;

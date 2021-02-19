@@ -1,7 +1,7 @@
 use crate::AdaptorError;
 use crate::Result;
 
-use adaptor_common::{AdaptorSettings, CANFrame};
+use adaptor_common::{AdaptorSettings, CANFrame, UsbRequests};
 use adaptor_common::{CMD_PACKET_SIZE, VENDOR_ID};
 
 use lazy_static::lazy_static;
@@ -47,24 +47,22 @@ lazy_static! {
 }
 
 use getset::{Getters, Setters};
-use std::sync::{atomic::AtomicBool, Arc};
+
 /// Adaptor handle struct
 /// this is more or less a wrapper around `rusb::DeviceHandle`
 /// with aditional fields for settings and info
 #[derive(Getters, Setters)]
 pub struct AdaptorHandle {
     handle: rusb::DeviceHandle<rusb::Context>,
+
     #[getset(get)]
     settings: AdaptorSettings,
+
     #[getset(get)]
     info: AdaptorInfo,
 
-    rx_thread_running: Arc<AtomicBool>,
-    rx_poll_handle: std::thread::JoinHandle<()>,
-
-    rx_callback: Option<Box<dyn Fn(CANFrame)>>,
-    // #[cfg(not(feature = "threaded"))]
-    // phantom: std::marker::PhantomData<&'a ()>,
+    #[getset(get)]
+    running: bool,
 }
 
 impl AdaptorHandle {
@@ -113,7 +111,6 @@ impl AdaptorHandle {
 
         let mut has_in_ep = false;
         let mut has_out_ep = false;
-        let mut has_swo_ep = false;
 
         if let Some(iface) = config.interfaces().next() {
             if let Some(desc) = iface.descriptors().next() {
@@ -123,8 +120,6 @@ impl AdaptorHandle {
                         has_out_ep = true;
                     } else if addr == info.in_ep {
                         has_in_ep = true;
-                    } else if addr == info.swo_ep {
-                        has_swo_ep = true;
                     }
                 }
             }
@@ -138,121 +133,123 @@ impl AdaptorHandle {
             return Err(AdaptorError::NoEndpointError);
         }
 
-        if !has_swo_ep {
-            return Err(AdaptorError::NoEndpointError);
-        }
+        let settings = AdaptorSettings::default();
 
-        #[cfg(feature = "threaded")]
-        {
-            let rx_callback = |frame: CANFrame| {};
-
-            let rx_thread_running = Arc::new(AtomicBool::new(true));
-            let internal_running = Arc::clone(rx_thread_running);
-            let thread_handle = std::thread::spawn(move || {
-                internal_running;
-                while internal_running.load(std::sync::atomic::Ordering::Acquire) {
-                    // check for frames
-                }
-            });
-            Ok(Self {
-                handle,
-                settings,
-                info,
-                rx_thread_running,
-                thread_handle,
-            })
-        }
-
-        #[cfg(not(feature = "threaded"))]
-        Ok(Self {
+        let temp = Self {
             handle,
             settings,
             info,
-        })
+            running: false,
+        };
+
+        temp.write_settings(std::time::Duration::from_secs_f32(1.0))?;
+
+        Ok(temp)
     }
 
-    #[cfg(feature = "threaded")]
-    pub fn register_rx_callback<F: Fn(CANFrame)>(&mut self, f: F) {}
-
-    pub fn config_settings<F: Fn(&mut AdaptorSettings) -> ()>(&mut self, f: F) -> Result<()> {
-        f(&mut self.settings);
-        self.send_settings()?;
-        Ok(())
-    }
-
-    fn send_settings(&self) -> Result<()> {
-        Ok(())
-    }
-
-    fn write(
-        &mut self,
-        cmd: &[u8],
-        write_bytes: &[u8],
-        timeout: std::time::Duration,
-    ) -> Result<()> {
-        assert!(cmd.len() <= CMD_PACKET_SIZE);
-        let mut padded_cmd = [0_u8; CMD_PACKET_SIZE];
-        padded_cmd[..cmd.len()].copy_from_slice(cmd);
-
-        let written_bytes = self
+    pub fn read_frame(&mut self, timeout: std::time::Duration) -> Result<CANFrame> {
+        let mut buffer = [0_u8; 256];
+        let _bytes = self
             .handle
-            .write_bulk(self.info.out_ep, &padded_cmd, timeout)?;
+            .read_bulk(self.info.in_ep, &mut buffer, timeout)?;
 
-        if written_bytes != CMD_PACKET_SIZE {
-            // create an actual error type for this
-            return Err(AdaptorError::SettingsError);
-        }
+        let (frame, _) = postcard::take_from_bytes(&buffer)?;
 
-        if write_bytes.len() > 0 {
-            let _written_bytes = self
-                .handle
-                .write_bulk(self.info.out_ep, &write_bytes, timeout)?;
+        log::trace!("Recieved frame: {:?}", frame);
 
-            if written_bytes <= write_bytes.len() {
-                // throw error
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn write_frame(&mut self, frame: CANFrame) -> Result<()> {
-        let mut buf = Vec::with_capacity(1024);
-        postcard::to_slice(&frame, buf.as_mut_slice()).expect("Buffer is the wrong size");
-
-        let cmd = [0_u8; 16];
-        self.write(&cmd, &buf, std::time::Duration::from_secs(1))?;
-
-        Ok(())
-    }
-
-    // TODO: We may want to make a seperate command that sends an entire batch
-    pub fn write_frames<T: IntoIterator<Item = CANFrame>>(&mut self, t: T) -> Result<usize> {
-        let mut count = 0;
-
-        for frame in t.into_iter() {
-            self.write_frame(frame)?;
-            count += 1;
-        }
-
-        Ok(count)
-    }
-
-    fn read(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn read_frame(&mut self) -> Result<CANFrame> {
-        let buf = Vec::new();
-
-        self.read()?;
-
-        let frame: CANFrame = postcard::from_bytes(&buf[..])?;
         Ok(frame)
     }
 
-    pub fn reset(&mut self) -> Result<()> {
-        Ok(self.handle.reset()?)
+    pub fn write_frame(&mut self, frame: CANFrame, timeout: std::time::Duration) -> Result<()> {
+        let vec = postcard::to_stdvec(&frame)?;
+        let bytes = self
+            .handle
+            .write_bulk(self.info.out_ep, vec.as_slice(), timeout)?;
+        log::info!("wrote {:?} bytes", bytes);
+        Ok(())
+    }
+
+    pub fn set_settings(
+        &mut self,
+        settings: AdaptorSettings,
+        timeout: std::time::Duration,
+    ) -> Result<()> {
+        self.modify_settings(timeout, |s| *s = settings)
+    }
+
+    pub fn modify_settings<F>(&mut self, timeout: std::time::Duration, f: F) -> Result<()>
+    where
+        F: Fn(&mut AdaptorSettings) -> (),
+    {
+        f(&mut self.settings);
+        self.write_settings(timeout)
+    }
+
+    fn write_settings(&self, timeout: std::time::Duration) -> Result<()> {
+        use rusb::{Direction, Recipient, RequestType};
+        let req_type = rusb::request_type(Direction::Out, RequestType::Vendor, Recipient::Device);
+        let vec = postcard::to_stdvec(&self.settings)?;
+        self.handle.write_control(
+            req_type,
+            UsbRequests::Settings.into(),
+            0x00,
+            0x00,
+            vec.as_slice(),
+            timeout,
+        )?;
+        Ok(())
+    }
+
+    fn write_running(&mut self, running: bool, timeout: std::time::Duration) -> Result<()> {
+        use rusb::{Direction, Recipient, RequestType};
+        let req_type = rusb::request_type(Direction::Out, RequestType::Vendor, Recipient::Device);
+        self.running = running;
+        self.handle.write_control(
+            req_type,
+            UsbRequests::Run.into(),
+            0x00,
+            0x00,
+            &[running as u8],
+            timeout,
+        )?;
+        Ok(())
+    }
+
+    #[inline]
+    pub fn start(&mut self, timeout: std::time::Duration) -> Result<()> {
+        self.write_running(true, timeout)
+    }
+
+    #[inline]
+    pub fn stop(&mut self, timeout: std::time::Duration) -> Result<()> {
+        self.write_running(false, timeout)
+    }
+
+    pub fn reset(&self, timeout: std::time::Duration) -> Result<()> {
+        use rusb::{Direction, Recipient, RequestType};
+        let req_type = rusb::request_type(Direction::Out, RequestType::Vendor, Recipient::Device);
+        let _bytes =
+            self.handle
+                .write_control(req_type, UsbRequests::Reset.into(), 0, 0, &[], timeout)?;
+        Ok(())
+    }
+
+    pub fn get_error(&self, timeout: std::time::Duration) -> Result<u8> {
+        use rusb::{Direction, Recipient, RequestType};
+        let req_type = rusb::request_type(Direction::In, RequestType::Vendor, Recipient::Device);
+        let mut buf = [0_u8];
+        let bytes = self.handle.read_control(
+            req_type,
+            UsbRequests::GetError.into(),
+            0x00,
+            0x00,
+            &mut buf,
+            timeout,
+        )?;
+
+        debug_assert!(bytes == 1);
+
+        Ok(buf[0])
     }
 }
 
